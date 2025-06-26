@@ -5,8 +5,11 @@ import org.springframework.stereotype.Service;
 import java.io.IOException;
 import java.nio.file.*;
 import java.nio.file.attribute.BasicFileAttributes;
+import java.text.ParseException;
+import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Date;
 import java.util.List;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutorService;
@@ -17,6 +20,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArraySet;
+import java.nio.charset.StandardCharsets;
 
 @Service
 public class FileScanService {
@@ -28,9 +32,34 @@ public class FileScanService {
 
     private Path scanStartPath;
 
-    public List<String> scan(String directoryPath, String fileMask, String threadsInput) throws IOException, InterruptedException {
+    Long minFileSize;
+    Long maxFileSize;
+    Date modifiedAfterDate;
+    Date modifiedBeforeDate;
+    String containsText;
+
+    private static final SimpleDateFormat DATE_FORMAT = new SimpleDateFormat("yyyy-MM-dd");
+    private static final long KB_TO_BYTES = 1024L;
+
+
+    public List<String> scan(String directoryPath, String fileMask, String threadsInput,
+                             Long minSizeKB, Long maxSizeKB,
+                             String modifiedAfter, String modifiedBefore,
+                             String containsText) throws IOException, InterruptedException {
         foundFiles.clear();
         runningTasks.clear();
+
+        this.minFileSize = (minSizeKB != null) ? minSizeKB * KB_TO_BYTES : null;
+        this.maxFileSize = (maxSizeKB != null) ? maxSizeKB * KB_TO_BYTES : null;
+        this.containsText = containsText;
+
+        try {
+            this.modifiedAfterDate = (modifiedAfter != null && !modifiedAfter.isEmpty()) ? DATE_FORMAT.parse(modifiedAfter) : null;
+            this.modifiedBeforeDate = (modifiedBefore != null && !modifiedBefore.isEmpty()) ? DATE_FORMAT.parse(modifiedBefore) : null;
+        } catch (ParseException e) {
+            throw new IllegalArgumentException("Invalid date format. Please use YYYY-MM-DD for modifiedAfter and modifiedBefore.", e);
+        }
+
 
         int numThreads;
         if (threadsInput.equalsIgnoreCase("auto")) {
@@ -51,6 +80,12 @@ public class FileScanService {
         System.out.println("Directory for scan: " + directoryPath);
         System.out.println("File mask: " + fileMask);
         System.out.println("Threads: " + numThreads);
+        System.out.println("Min Size: " + (minSizeKB != null ? minSizeKB + " KB" : "N/A"));
+        System.out.println("Max Size: " + (maxSizeKB != null ? maxSizeKB + " KB" : "N/A"));
+        System.out.println("Modified After: " + (modifiedAfterDate != null ? DATE_FORMAT.format(modifiedAfterDate) : "N/A"));
+        System.out.println("Modified Before: " + (modifiedBeforeDate != null ? DATE_FORMAT.format(modifiedBeforeDate) : "N/A"));
+        System.out.println("Contains Text: " + (containsText != null && !containsText.isEmpty() ? "'" + containsText + "'" : "N/A"));
+
 
         String regex = fileMask.replace(".", "\\.").replace("*", ".*").replace("?", ".");
         this.currentPattern = Pattern.compile(regex, Pattern.CASE_INSENSITIVE);
@@ -88,8 +123,6 @@ public class FileScanService {
                     Thread.sleep(50);
                 }
             }
-
-            boolean terminated = currentExecutorService.awaitTermination(1, TimeUnit.MINUTES);  // Против бесконечного ожидания
 
         } finally {
             if (currentExecutorService != null && !currentExecutorService.isShutdown()) {
