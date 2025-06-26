@@ -11,47 +11,90 @@ import java.util.List;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.Set;
+import java.util.concurrent.CopyOnWriteArraySet;
 
 @Service
 public class FileScanService {
 
-    private final ConcurrentLinkedQueue<String> foundFiles = new ConcurrentLinkedQueue<>();
+    final ConcurrentLinkedQueue<String> foundFiles = new ConcurrentLinkedQueue<>();
+    Pattern currentPattern;
+    ExecutorService currentExecutorService;
+    final Set<Future<?>> runningTasks = new CopyOnWriteArraySet<>();
 
-    public List<String> scan(String directoryPath, String fileMask, String threadsInput) throws IOException, InterruptedException{
+    private Path scanStartPath;
+
+    public List<String> scan(String directoryPath, String fileMask, String threadsInput) throws IOException, InterruptedException {
         foundFiles.clear();
+        runningTasks.clear();
+
         int numThreads;
-        if (threadsInput.equalsIgnoreCase("auto")){
+        if (threadsInput.equalsIgnoreCase("auto")) {
             numThreads = Runtime.getRuntime().availableProcessors();
         } else {
             try {
                 numThreads = Integer.parseInt(threadsInput);
-                if (numThreads <= 0 ){
-                    System.err.println("Numbers of processors cant be 0 or -n");
+                if (numThreads <= 0) {
+                    System.err.println("Numbers of threads can't be 0 or negative. Using available processors.");
                     numThreads = Runtime.getRuntime().availableProcessors();
                 }
-            } catch (NumberFormatException e){
-                System.err.println("Uncorrect format");
+            } catch (NumberFormatException e) {
+                System.err.println("Incorrect format for threads. Using available processors.");
                 numThreads = Runtime.getRuntime().availableProcessors();
             }
         }
-        System.out.println("Directory for scan: "+ directoryPath);
+
+        System.out.println("Directory for scan: " + directoryPath);
         System.out.println("File mask: " + fileMask);
         System.out.println("Threads: " + numThreads);
 
-        ExecutorService executorService = Executors.newFixedThreadPool(numThreads);
-        try{
-            Path startPath = Paths.get(directoryPath);
-            FileSearchVisitor visitor = new FileSearchVisitor(fileMask, executorService);
-            Files.walkFileTree(startPath, visitor);
-            executorService.shutdown();
-            executorService.awaitTermination(1, TimeUnit.MINUTES); // Против бесконечного ожидания
-        } catch (InvalidPathException e){
-            throw new IOException("Uncorrected filepath" + directoryPath, e);
+        String regex = fileMask.replace(".", "\\.").replace("*", ".*").replace("?", ".");
+        this.currentPattern = Pattern.compile(regex, Pattern.CASE_INSENSITIVE);
+        this.currentExecutorService = Executors.newFixedThreadPool(numThreads);
+
+        try {
+            this.scanStartPath = Paths.get(directoryPath);
+
+            if (!Files.exists(scanStartPath) || !Files.isDirectory(scanStartPath)) {
+                return Collections.emptyList();
+            }
+
+            FileSearchVisitor initialVisitor = new FileSearchVisitor(this, true, scanStartPath);
+            Files.walkFileTree(scanStartPath, initialVisitor);
+
+
+            currentExecutorService.shutdown();
+
+            while (!runningTasks.isEmpty()) {
+                Set<Future<?>> tasksToComplete = new CopyOnWriteArraySet<>(runningTasks);
+                for (Future<?> future : tasksToComplete) {
+                    if (future.isDone() || future.isCancelled()) {
+                        runningTasks.remove(future);
+                    } else {
+                        try {
+                            future.get(100, TimeUnit.MILLISECONDS);
+                        } catch (java.util.concurrent.TimeoutException e) {
+                        } catch (Exception e) {
+                            System.err.println("DEBUG ERROR: Error while waiting for task: " + e.getMessage());
+                            runningTasks.remove(future);
+                        }
+                    }
+                }
+                if (!runningTasks.isEmpty()) {
+                    Thread.sleep(50);
+                }
+            }
+
+            boolean terminated = currentExecutorService.awaitTermination(1, TimeUnit.MINUTES);  // Против бесконечного ожидания
+
         } finally {
-            executorService.shutdownNow();
+            if (currentExecutorService != null && !currentExecutorService.isShutdown()) {
+                currentExecutorService.shutdownNow();
+            }
         }
 
         List<String> sortedFiles = new ArrayList<>(foundFiles);
@@ -59,42 +102,4 @@ public class FileScanService {
 
         return sortedFiles;
     }
-
-    private class FileSearchVisitor extends SimpleFileVisitor<Path> {
-        private final Pattern pattern;
-        private final ExecutorService executorService;
-
-        public FileSearchVisitor (String fileMask, ExecutorService executorService){
-            String regex = fileMask.replace(".", "\\.").replace("*", ".*").replace("?", ".");
-            this.pattern = Pattern.compile(regex);
-            this.executorService = executorService;
-        }
-
-        @Override
-        public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
-            String fileName = file.getFileName().toString();
-            Matcher matcher = pattern.matcher(fileName);
-            if (matcher.matches()) {
-                foundFiles.add(file.toAbsolutePath().toString());
-            }
-            return FileVisitResult.CONTINUE;
-        }
-        @Override
-        public FileVisitResult preVisitDirectory (Path dir, BasicFileAttributes attrs) {
-            executorService.submit(() -> {
-                try {
-                    Files.walkFileTree(dir, this);
-                } catch (IOException e) {
-                    System.err.println("Ошибка доступа к директории " + dir + ": " + e.getMessage());
-                }
-            });
-            return FileVisitResult.SKIP_SUBTREE;
-        }
-        @Override
-        public FileVisitResult visitFileFailed(Path file, IOException exc) {
-            System.err.println("Ошибка доступа к файлу/директории " + file + ": " + exc.getMessage());
-            return FileVisitResult.CONTINUE;
-        }
-    }
-
 }
