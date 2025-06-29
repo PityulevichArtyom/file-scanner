@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Файловый Сканер</title>
+</head>
+<body>
+<div class="container">
+    <h1>Параметры сканирования файлов</h1>
+
+    <form id="scanForm">
+        <div>
+            <label for="path">Путь для сканирования (обязательно):</label>
+            <input type="text" id="path" name="path" value="C:/TestSoft" required>
+        </div>
+        <div>
+            <label for="mask">Маска файла (обязательно, например *.txt):</label>
+            <input type="text" id="mask" name="mask" value="*.txt" required>
+        </div>
+        <div>
+            <label for="threads">Количество потоков (число или 'auto', по умолчанию 'auto'):</label>
+            <input type="text" id="threads" name="threads" value="auto">
+        </div>
+        <div>
+            <label for="minSizeKB">Минимальный размер (КБ):</label>
+            <input type="number" id="minSizeKB" name="minSizeKB" min="0">
+        </div>
+        <div>
+            <label for="maxSizeKB">Максимальный размер (КБ):</label>
+            <input type="number" id="maxSizeKB" name="maxSizeKB" min="0">
+        </div>
+        <div>
+            <label for="modifiedAfter">Изменен после (ГГГГ-ММ-ДД):</label>
+            <input type="date" id="modifiedAfter" name="modifiedAfter">
+        </div>
+        <div>
+            <label for="modifiedBefore">Изменен до (ГГГГ-ММ-ДД):</label>
+            <input type="date" id="modifiedBefore" name="modifiedBefore">
+        </div>
+        <div>
+            <label for="containsText">Содержит текст (только для текстовых файлов):</label>
+            <input type="text" id="containsText" name="containsText">
+        </div>
+        <button type="submit">Начать сканирование</button>
+    </form>
+
+    <h2>Результаты:</h2>
+    <div id="results" class="loading">
+        Ожидание запуска сканирования...
+    </div>
+</div>
+
+<script>
+    document.getElementById('scanForm').addEventListener('submit', function(event) {
+        event.preventDefault();
+
+        const form = event.target;
+        const formData = new FormData(form);
+        const params = new URLSearchParams();
+        const resultsDiv = document.getElementById('results');
+
+        resultsDiv.innerHTML = '<div class="loading">Сканирование... Пожалуйста, подождите.</div>';
+
+        for (const [key, value] of formData.entries()) {
+            if (value !== null && value !== '') {
+                params.append(key, value);
+            }
+        }
+
+        const queryString = params.toString();
+        const url = '/scan?' + queryString;
+
+        fetch(url)
+            .then(response => {
+                if (!response.ok) {
+                    return response.json().then(errorData => {
+                        if (Array.isArray(errorData) && errorData.length > 0) {
+                            throw new Error(errorData[0]);
+                        } else {
+                            throw new Error(`HTTP error! status: ${response.status}`);
+                        }
+                    });
+                }
+                return response.json();
+            })
+            .then(data => {
+                resultsDiv.innerHTML = '';
+                if (data.length > 0) {
+                    const ul = document.createElement('ul');
+                    data.forEach(file => {
+                        const li = document.createElement('li');
+                        li.textContent = file;
+                        ul.appendChild(li);
+                    });
+                    resultsDiv.appendChild(ul);
+                } else {
+                    resultsDiv.innerHTML = 'Файлы не найдены по заданным критериям.';
+                }
+            })
+            .catch(error => {
+                console.error('Ошибка при запросе:', error);
+                resultsDiv.innerHTML = '<div class="error">Произошла ошибка: ' + error.message + '</div>';
+            });
+    });
+</script>
+</body>
+</html>
