@@ -24,6 +24,11 @@ public class FileSearchVisitor extends SimpleFileVisitor<Path> {
 
     @Override
     public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
+        if (parentService.scanInterrupted) {
+            System.out.println("Scan interrupted for file: " + file.toAbsolutePath());
+            return FileVisitResult.TERMINATE; // Прерываем обход
+        }
+
         String fileName = file.getFileName().toString();
         Matcher matcher = parentService.currentPattern.matcher(fileName);
 
@@ -83,6 +88,9 @@ public class FileSearchVisitor extends SimpleFileVisitor<Path> {
                 } catch (IOException e) {
                     System.err.println("Error reading content of file " + file.toAbsolutePath() + ": " + e.getMessage());
                     return FileVisitResult.CONTINUE;
+                } catch (OutOfMemoryError e) {
+                    System.err.println("Memory error reading large file " + file.toAbsolutePath() + ". Skipping content search.");
+                    return FileVisitResult.CONTINUE;
                 }
             } else {
                 return FileVisitResult.CONTINUE;
@@ -95,6 +103,10 @@ public class FileSearchVisitor extends SimpleFileVisitor<Path> {
 
     @Override
     public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) {
+        if (parentService.scanInterrupted) { //Прерывание потоков
+            System.out.println("Scan interrupted for directory: " + dir.toAbsolutePath());
+            return FileVisitResult.TERMINATE;
+        }
 
         if (isRootForParallelization) {
             if (!dir.equals(visitorRootPath)) {

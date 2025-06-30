@@ -4,7 +4,6 @@ import org.springframework.stereotype.Service;
 
 import java.io.IOException;
 import java.nio.file.*;
-import java.nio.file.attribute.BasicFileAttributes;
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
@@ -16,14 +15,17 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
-import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArraySet;
-import java.nio.charset.StandardCharsets;
 
 @Service
 public class FileScanService {
+    private final ScanCache scanCache;
+    volatile boolean scanInterrupted = false;
+    public FileScanService(ScanCache scanCache) {
+        this.scanCache = scanCache;
+    }
 
     final ConcurrentLinkedQueue<String> foundFiles = new ConcurrentLinkedQueue<>();
     Pattern currentPattern;
@@ -46,8 +48,20 @@ public class FileScanService {
                              Long minSizeKB, Long maxSizeKB,
                              String modifiedAfter, String modifiedBefore,
                              String containsText) throws IOException, InterruptedException {
+
+        String cacheKey = scanCache.generateCacheKey(directoryPath, fileMask, minSizeKB, maxSizeKB, modifiedAfter, modifiedBefore, containsText);
+
+        ScanCache.CacheEntry cachedResult = scanCache.getValidCacheEntry(cacheKey);
+        if (cachedResult != null) {
+            System.out.println("Returning result from cache for key: " + cacheKey);
+            this.scanInterrupted = false;
+            return cachedResult.files;
+        }
+
         foundFiles.clear();
         runningTasks.clear();
+        scanInterrupted = false;
+
 
         this.minFileSize = (minSizeKB != null) ? minSizeKB * KB_TO_BYTES : null;
         this.maxFileSize = (maxSizeKB != null) ? maxSizeKB * KB_TO_BYTES : null;
@@ -104,9 +118,14 @@ public class FileScanService {
 
             currentExecutorService.shutdown();
 
-            while (!runningTasks.isEmpty()) {
+            while (!runningTasks.isEmpty() && !scanInterrupted) {
                 Set<Future<?>> tasksToComplete = new CopyOnWriteArraySet<>(runningTasks);
                 for (Future<?> future : tasksToComplete) {
+                    if (scanInterrupted) {
+                        future.cancel(true);
+                        runningTasks.remove(future);
+                        continue;
+                    }
                     if (future.isDone() || future.isCancelled()) {
                         runningTasks.remove(future);
                     } else {
@@ -119,11 +138,21 @@ public class FileScanService {
                         }
                     }
                 }
-                if (!runningTasks.isEmpty()) {
+                if (!runningTasks.isEmpty() && !scanInterrupted) {
                     Thread.sleep(50);
                 }
             }
 
+            boolean terminated = currentExecutorService.awaitTermination(1, TimeUnit.MINUTES);
+            if (!terminated) {
+                System.err.println("ExecutorService did not terminate in 1 minute.");
+            }
+
+            if (scanInterrupted) {
+                System.out.println("Scan was interrupted by user. Returning partial results.");
+                // Не кэшируем прерванные результаты
+                return new ArrayList<>(foundFiles);
+            }
         } finally {
             if (currentExecutorService != null && !currentExecutorService.isShutdown()) {
                 currentExecutorService.shutdownNow();
@@ -133,6 +162,22 @@ public class FileScanService {
         List<String> sortedFiles = new ArrayList<>(foundFiles);
         Collections.sort(sortedFiles);
 
+        scanCache.put(cacheKey, sortedFiles);
+
         return sortedFiles;
+    }
+
+    public void interruptScan() {
+        this.scanInterrupted = true;
+        if (currentExecutorService != null && !currentExecutorService.isShutdown()) {
+            currentExecutorService.shutdownNow();
+            System.out.println("Attempted to forcefully shut down executor service.");
+        }
+        for (Future<?> future : runningTasks) {
+            future.cancel(true);
+        }
+        runningTasks.clear();
+        System.out.println("Scan interruption requested. All tasks cancelled.");
+        scanCache.clear();
     }
 }

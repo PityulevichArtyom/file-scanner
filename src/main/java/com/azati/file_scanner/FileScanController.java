@@ -38,6 +38,14 @@ public class FileScanController {
                     containsText
             );
 
+            //Оработка сообщения о прерывании
+            if (foundFiles.size() == 1 && foundFiles.get(0).equals("Scan was interrupted.")) {
+                return new ResponseEntity<>(
+                        Collections.singletonList("Scan was interrupted by user."),
+                        HttpStatus.OK
+                );
+            }
+
             if (foundFiles.isEmpty()){
                 return new ResponseEntity<>(
                         Collections.singletonList("Not found with mask: "+ mask),
@@ -60,5 +68,12 @@ public class FileScanController {
                     HttpStatus.BAD_REQUEST
             );
         }
+    }
+
+    //Эндпоинт для прерывания сканирования
+    @GetMapping("/cancel")
+    public ResponseEntity<String> cancelScan() {
+        fileScanService.interruptScan();
+        return new ResponseEntity<>("Scan cancellation initiated.", HttpStatus.OK);
     }
 }

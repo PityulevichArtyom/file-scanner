@@ -45,7 +45,10 @@
         <button type="submit">Начать сканирование</button>
     </form>
 
-    <h2>Результаты:</h2>
+    <hr> <h2>Управление поиском:</h2>
+    <button id="cancelScanButton">Прервать текущий поиск</button>
+
+    <hr> <h2>Результаты:</h2>
     <div id="results" class="loading">
         Ожидание запуска сканирования...
     </div>
@@ -60,7 +63,7 @@
         const params = new URLSearchParams();
         const resultsDiv = document.getElementById('results');
 
-        resultsDiv.innerHTML = '<div class="loading">Сканирование... Пожалуйста, подождите.</div>';
+        resultsDiv.textContent = 'Сканирование... Пожалуйста, подождите.';
 
         for (const [key, value] of formData.entries()) {
             if (value !== null && value !== '') {
@@ -87,20 +90,39 @@
             .then(data => {
                 resultsDiv.innerHTML = '';
                 if (data.length > 0) {
-                    const ul = document.createElement('ul');
-                    data.forEach(file => {
-                        const li = document.createElement('li');
-                        li.textContent = file;
-                        ul.appendChild(li);
-                    });
-                    resultsDiv.appendChild(ul);
+                    if (data.length === 1 && data[0] === "Scan was interrupted.") {
+                        resultsDiv.textContent = 'Сканирование было прервано пользователем.';
+                    } else {
+                        const ul = document.createElement('ul');
+                        data.forEach(file => {
+                            const li = document.createElement('li');
+                            li.textContent = file;
+                            ul.appendChild(li);
+                        });
+                        resultsDiv.appendChild(ul);
+                    }
                 } else {
-                    resultsDiv.innerHTML = 'Файлы не найдены по заданным критериям.';
+                    resultsDiv.textContent = 'Файлы не найдены по заданным критериям.';
                 }
             })
             .catch(error => {
                 console.error('Ошибка при запросе:', error);
-                resultsDiv.innerHTML = '<div class="error">Произошла ошибка: ' + error.message + '</div>';
+                resultsDiv.textContent = 'Произошла ошибка: ' + error.message;
+            });
+    });
+
+    document.getElementById('cancelScanButton').addEventListener('click', function() {
+        const resultsDiv = document.getElementById('results');
+        resultsDiv.textContent = 'Отправляем запрос на прерывание сканирования...';
+
+        fetch('/scan/cancel')
+            .then(response => response.text())
+            .then(message => {
+                resultsDiv.textContent = 'Сообщение отмены: ' + message;
+            })
+            .catch(error => {
+                console.error('Ошибка при отмене запроса:', error);
+                resultsDiv.textContent = 'Ошибка при попытке отменить сканирование: ' + error.message;
             });
     });
 </script>
